@@ -27,6 +27,8 @@ fn tls_view(tls: Option<&RedisTls>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({
             "ca_certs": tls.ca_certs,
+            "ca_data": tls.ca_data,
+            "ca_path": tls.ca_path,
             "verify_certificate": tls.verify_certificate,
             "check_hostname": tls.check_hostname,
         })
@@ -52,6 +54,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "port": host.port,
             "db": host.db,
             "tls": tls_view(host.tls.as_ref()),
+            "unix_socket_path": host.unix_socket_path,
         }),
         RedisEndpoint::Url { url, tls } => serde_json::json!({
             "mode": "url",
@@ -120,6 +123,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -138,11 +142,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 2,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6380,
             "socket_connect_timeout": null,
             "socket_timeout": 1.5,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -160,11 +167,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "environment",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6390,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -182,6 +192,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 3,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6380,
             "socket_connect_timeout": null,
             "socket_timeout": 2.5,
@@ -200,6 +211,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 0.75,
@@ -250,6 +262,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "configured",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -270,6 +283,8 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             },
@@ -290,6 +305,8 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             },
@@ -350,6 +367,8 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": "/ca.pem",
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": true,
                 "verify_certificate": true
             }
@@ -445,6 +464,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -462,6 +482,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -479,11 +500,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": "/gcp-ca.pem",
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -500,6 +524,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -517,6 +542,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -535,6 +561,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -555,11 +582,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "cache-1",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -579,11 +609,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "cache-1",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -605,6 +638,8 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             },
@@ -623,11 +658,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": "/ca.pem",
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": true,
                 "verify_certificate": false
             }
@@ -645,11 +683,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": "/env-ca.pem",
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -667,6 +708,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": 0.25,
             "socket_timeout": 2.5,
@@ -685,6 +727,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "referenced",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -703,11 +746,14 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": {
                 "ca_certs": null,
+                "ca_data": null,
+                "ca_path": null,
                 "check_hostname": false,
                 "verify_certificate": true
             }
@@ -725,6 +771,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -743,6 +790,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -761,6 +809,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -779,6 +828,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -797,6 +847,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -815,6 +866,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -833,6 +885,7 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": null,
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
@@ -851,10 +904,86 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
             "db": 0,
             "host": "redis",
             "mode": "host",
+            "unix_socket_path": "/tmp/redis.sock",
             "port": 6379,
             "socket_connect_timeout": null,
             "socket_timeout": 5.0,
             "tls": null
+        })
+)]
+#[case::ssl_ca_data(
+    r#"{"host": "redis", "ssl": true, "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}"#,
+    &[],
+    serde_json::json!({
+            "auth": {
+                "kind": "static",
+                "password": null,
+                "username": null
+            },
+            "db": 0,
+            "host": "redis",
+            "mode": "host",
+            "port": 6379,
+            "socket_connect_timeout": null,
+            "socket_timeout": 5.0,
+            "tls": {
+                "ca_certs": null,
+                "ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+                "ca_path": null,
+                "check_hostname": false,
+                "verify_certificate": true
+            },
+            "unix_socket_path": null
+        })
+)]
+#[case::ssl_ca_path_from_the_environment(
+    r#"{"host": "redis"}"#,
+    &[("REDIS_SSL", "true"), ("REDIS_SSL_CA_PATH", "/etc/ssl/private-cas")],
+    serde_json::json!({
+            "auth": {
+                "kind": "static",
+                "password": null,
+                "username": null
+            },
+            "db": 0,
+            "host": "redis",
+            "mode": "host",
+            "port": 6379,
+            "socket_connect_timeout": null,
+            "socket_timeout": 5.0,
+            "tls": {
+                "ca_certs": null,
+                "ca_data": null,
+                "ca_path": "/etc/ssl/private-cas",
+                "check_hostname": false,
+                "verify_certificate": true
+            },
+            "unix_socket_path": null
+        })
+)]
+#[case::unix_socket_path_keeps_tls_settings_out_of_the_target(
+    r#"{"host": "redis", "ssl": true, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"}"#,
+    &[],
+    serde_json::json!({
+            "auth": {
+                "kind": "static",
+                "password": null,
+                "username": null
+            },
+            "db": 0,
+            "host": "redis",
+            "mode": "host",
+            "port": 6379,
+            "socket_connect_timeout": null,
+            "socket_timeout": 5.0,
+            "tls": {
+                "ca_certs": "/ca.pem",
+                "ca_data": null,
+                "ca_path": null,
+                "check_hostname": false,
+                "verify_certificate": true
+            },
+            "unix_socket_path": "/tmp/redis.sock"
         })
 )]
 fn resolves_like_litellm_redis_py(
@@ -871,6 +1000,7 @@ fn resolves_like_litellm_redis_py(
 #[case::aws_iam_without_tls_fails(r#"{"aws_iam_auth": true, "aws_iam_cache_name": "cache-1", "aws_iam_region": "us-east-1", "aws_iam_user_name": "iam-user", "host": "cache-1"}"#, &[])]
 #[case::aws_iam_without_a_region_fails(r#"{"aws_iam_auth": true, "aws_iam_cache_name": "cache-1", "aws_iam_user_name": "iam-user", "host": "cache-1", "ssl": true}"#, &[])]
 #[case::no_target_fails(r#"{"port": 6379}"#, &[])]
+#[case::unix_socket_path_without_a_host_fails_like_python(r#"{"unix_socket_path": "/tmp/redis.sock"}"#, &[])]
 fn fails_like_litellm_redis_py(#[case] kwargs: &str, #[case] environment: &[(&str, &str)]) {
     assert!(resolve(kwargs, environment).is_err());
 }

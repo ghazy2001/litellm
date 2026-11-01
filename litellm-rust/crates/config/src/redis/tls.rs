@@ -3,6 +3,8 @@ use super::{Expected, Kwargs, RedisError, bool_value, parsed, text_value};
 #[derive(Clone, Debug, PartialEq)]
 pub struct RedisTls {
     pub ca_certs: Option<String>,
+    pub ca_data: Option<String>,
+    pub ca_path: Option<String>,
     pub certfile: Option<String>,
     pub keyfile: Option<String>,
     pub verify_certificate: bool,
@@ -13,6 +15,8 @@ impl RedisTls {
     pub(super) fn url_default() -> Self {
         Self {
             ca_certs: None,
+            ca_data: None,
+            ca_path: None,
             certfile: None,
             keyfile: None,
             verify_certificate: true,
@@ -39,6 +43,8 @@ pub(super) fn tls_options(
         .unwrap_or(true);
     Ok(RedisTls {
         ca_certs: gcp_ca_certs.or_else(|| text_value(merged, "ssl_ca_certs")),
+        ca_data: text_value(merged, "ssl_ca_data"),
+        ca_path: text_value(merged, "ssl_ca_path"),
         certfile: text_value(merged, "ssl_certfile"),
         keyfile: text_value(merged, "ssl_keyfile"),
         verify_certificate,

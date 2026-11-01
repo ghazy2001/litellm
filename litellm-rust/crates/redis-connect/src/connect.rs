@@ -26,6 +26,9 @@ pub struct HostServices {
 }
 
 pub fn connect(resolved: ResolvedRedis, host: HostServices) -> Result<RedisClient, Error> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
     tracing::info!(endpoint = ?resolved.endpoint, namespace = ?resolved.namespace, "redis client configured");
     let credentials = credentials(resolved.auth, &host)?;
     let events = host.events;
@@ -91,6 +94,7 @@ fn endpoint(endpoint: RedisEndpoint) -> Endpoint {
             port: host.port,
             tls: host.tls.map(tls_options),
             db: host.db,
+            unix_socket_path: host.unix_socket_path.map(Into::into),
         }),
         RedisEndpoint::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
             nodes: nodes(cluster.nodes),
@@ -109,6 +113,8 @@ fn endpoint(endpoint: RedisEndpoint) -> Endpoint {
 fn tls_options(tls: RedisTls) -> TlsOptions {
     TlsOptions {
         ca_certs: tls.ca_certs.map(Into::into),
+        ca_data: tls.ca_data,
+        ca_path: tls.ca_path.map(Into::into),
         certfile: tls.certfile.map(Into::into),
         keyfile: tls.keyfile.map(Into::into),
         verify_certificate: tls.verify_certificate,

@@ -136,6 +136,8 @@ pub struct RedisHost {
     pub port: u16,
     pub tls: Option<RedisTls>,
     pub db: i64,
+    /// redis-py's `UnixDomainSocketConnection`: when set, host, port and TLS are not used
+    pub unix_socket_path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -255,6 +257,7 @@ impl RedisSettings {
                     port: integer(&merged, "port")?.unwrap_or(6379),
                     tls,
                     db,
+                    unix_socket_path: text_value(&merged, "unix_socket_path"),
                 }),
             },
         };

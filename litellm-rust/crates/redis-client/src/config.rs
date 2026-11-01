@@ -92,6 +92,9 @@ pub struct HostEndpoint {
     pub port: u16,
     pub tls: Option<TlsOptions>,
     pub db: i64,
+    /// Connect over this unix socket instead of host, port and TLS, like redis-py's
+    /// `UnixDomainSocketConnection`
+    pub unix_socket_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +121,10 @@ pub struct SentinelEndpoint {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TlsOptions {
     pub ca_certs: Option<PathBuf>,
+    /// PEM text trusted alongside `ca_certs`, redis-py's `ssl_ca_data`
+    pub ca_data: Option<String>,
+    /// A directory whose files are PEM certificates to trust, redis-py's `ssl_ca_path`
+    pub ca_path: Option<PathBuf>,
     pub certfile: Option<PathBuf>,
     pub keyfile: Option<PathBuf>,
     pub verify_certificate: bool,
@@ -147,14 +154,21 @@ impl TlsOptions {
             }),
             (None, _) => None,
         };
+        let from_file: Option<Vec<u8>> = self.ca_certs.as_ref().map(read).transpose()?;
+        let from_directory: Vec<Vec<u8>> = self
+            .ca_path
+            .as_ref()
+            .map(read_directory)
+            .transpose()?
+            .unwrap_or_default();
+        let configured: Vec<Vec<u8>> = from_file
+            .into_iter()
+            .chain(self.ca_data.iter().map(|pem| pem.clone().into_bytes()))
+            .chain(from_directory)
+            .collect();
         Ok(TlsCertificates {
             client_tls,
-            root_cert: self
-                .ca_certs
-                .as_ref()
-                .map(read)
-                .transpose()?
-                .map(with_system_roots),
+            root_cert: (!configured.is_empty()).then(|| with_system_roots(configured.join(&b'\n'))),
         })
     }
 
@@ -194,6 +208,26 @@ fn with_system_roots(configured: Vec<u8>) -> Vec<u8> {
         .collect()
 }
 
+/// Every regular file in `path`, in name order, as redis-py hands `ssl_ca_path` to
+/// `load_verify_locations(capath=...)`
+fn read_directory(path: &PathBuf) -> Result<Vec<Vec<u8>>, ConnectError> {
+    let tls_file = |source| ConnectError::TlsFile {
+        path: path.display().to_string(),
+        source,
+    };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(path)
+        .map_err(tls_file)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()
+        .map_err(tls_file)?;
+    files.sort();
+    files
+        .iter()
+        .filter(|file| file.is_file())
+        .map(read)
+        .collect()
+}
+
 fn read(path: &PathBuf) -> Result<Vec<u8>, ConnectError> {
     std::fs::read(path).map_err(|source| ConnectError::TlsFile {
         path: path.display().to_string(),
@@ -229,9 +263,16 @@ impl Endpoint {
         let (info, tls) = match self {
             Self::Url { url, tls } => (url.expose().into_connection_info()?, Some(tls)),
             Self::Host(host) => {
-                let info = addr(&host.host, host.port, host.tls.as_ref()).into_connection_info()?;
+                let (addr, tls) = match &host.unix_socket_path {
+                    Some(path) => (ConnectionAddr::Unix(path.clone()), None),
+                    None => (
+                        addr(&host.host, host.port, host.tls.as_ref()),
+                        host.tls.as_ref(),
+                    ),
+                };
+                let info = addr.into_connection_info()?;
                 let settings = info.redis_settings().clone().set_db(host.db);
-                (info.set_redis_settings(settings), host.tls.as_ref())
+                (info.set_redis_settings(settings), tls)
             }
             Self::Cluster(_) | Self::Sentinel(_) => {
                 unreachable!("cluster and sentinel endpoints build their own connection info")
@@ -259,4 +300,25 @@ fn with_static_credentials(info: ConnectionInfo, credentials: &Credentials) -> C
         _ => settings,
     };
     info.set_redis_settings(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_unix_socket_path_replaces_host_port_and_tls_like_redis_py() {
+        let endpoint = Endpoint::Host(HostEndpoint {
+            host: "ignored".to_owned(),
+            port: 1,
+            tls: Some(TlsOptions::verified()),
+            db: 3,
+            unix_socket_path: Some("/tmp/redis.sock".into()),
+        });
+
+        let info = endpoint.connection_info(&Credentials::NONE).unwrap();
+
+        assert_eq!(*info.addr(), ConnectionAddr::Unix("/tmp/redis.sock".into()));
+        assert_eq!(info.redis_settings().db(), 3);
+    }
 }

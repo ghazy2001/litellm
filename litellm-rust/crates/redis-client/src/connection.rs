@@ -267,6 +267,7 @@ impl SentinelConnection {
             port,
             tls: self.0.endpoint.tls.clone(),
             db: self.0.endpoint.db,
+            unix_socket_path: None,
         });
         let info = endpoint
             .connection_info(&self.0.credentials)

@@ -208,6 +208,7 @@ mod tests {
                 port,
                 tls: None,
                 db: 0,
+                unix_socket_path: None,
             }),
             auth: RedisAuth::Static {
                 username: None,
