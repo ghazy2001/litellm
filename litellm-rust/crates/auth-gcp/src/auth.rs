@@ -163,6 +163,54 @@ impl VertexTokenSource for GcpTokenSource {
     }
 }
 
+struct AuthorizedUserTokenSource {
+    credentials: google_cloud_auth::credentials::AccessTokenCredentials,
+    project_id: Option<String>,
+}
+
+impl VertexTokenSource for AuthorizedUserTokenSource {
+    fn project_id(&self) -> VertexAuthFuture<'_, String> {
+        Box::pin(async move {
+            self.project_id
+                .clone()
+                .ok_or(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                    subject: "GCP quota project",
+                }))
+        })
+    }
+
+    fn token(&self) -> VertexAuthFuture<'_, String> {
+        Box::pin(async move {
+            self.credentials
+                .access_token()
+                .await
+                .map(|token| token.token)
+                .map_err(auth_acquisition_error)
+        })
+    }
+}
+
+fn load_application_credentials(path: &str) -> Result<Arc<dyn VertexTokenSource>, Error> {
+    let contents = std::fs::read_to_string(path).map_err(auth_acquisition_error)?;
+    let configured: Value = serde_json::from_str(&contents).map_err(auth_acquisition_error)?;
+    if configured.get("type").and_then(Value::as_str) == Some("authorized_user") {
+        let project_id = configured
+            .get("quota_project_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let credentials = google_cloud_auth::credentials::user_account::Builder::new(configured)
+            .with_scopes([CLOUD_PLATFORM_SCOPE])
+            .build_access_token_credentials()
+            .map_err(auth_acquisition_error)?;
+        return Ok(Arc::new(AuthorizedUserTokenSource {
+            credentials,
+            project_id,
+        }));
+    }
+    let provider = CustomServiceAccount::from_json(&contents).map_err(auth_acquisition_error)?;
+    Ok(Arc::new(GcpTokenSource(Arc::new(provider))))
+}
+
 struct GcpProviderLoader;
 
 impl VertexProviderLoader for GcpProviderLoader {
@@ -179,7 +227,7 @@ impl VertexProviderLoader for GcpProviderLoader {
                     Arc::new(load_trusted_service_account(configured.expose())?)
                 }
                 CredentialSource::ApplicationCredentials(path) => {
-                    Arc::new(CustomServiceAccount::from_file(path).map_err(auth_acquisition_error)?)
+                    return load_application_credentials(&path);
                 }
                 CredentialSource::Adc => {
                     gcp_auth::provider().await.map_err(auth_acquisition_error)?
@@ -249,7 +297,7 @@ fn load_trusted_service_account(configured: &str) -> Result<CustomServiceAccount
     .map_err(auth_acquisition_error)
 }
 
-fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
+fn auth_acquisition_error(error: impl std::error::Error + Send + Sync + 'static) -> Error {
     Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::failed(
         "Vertex AI credentials",
         error,
@@ -261,6 +309,50 @@ mod tests {
     use litellm_secret_value::SecretValue;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[tokio::test(start_paused = true)]
+    async fn explicit_authorized_user_file_refreshes_expired_tokens() {
+        use axum::{Json, Router, routing::post};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let recorded = requests.clone();
+        let app = Router::new().route("/token", post(move || {
+            let recorded = recorded.clone();
+            async move {
+                Json(serde_json::json!({
+                    "access_token": format!("token-{}", recorded.fetch_add(1, Ordering::SeqCst)),
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                }))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), serde_json::json!({
+            "type": "authorized_user", "client_id": "user-client", "client_secret": "user-secret",
+            "refresh_token": "user-refresh", "quota_project_id": "quota-project",
+            "token_uri": format!("http://{address}/token"),
+        }).to_string()).unwrap();
+        let provider = GcpProviderLoader
+            .load(CredentialSource::ApplicationCredentials(
+                file.path().to_str().unwrap().into(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(provider.project_id().await.unwrap(), "quota-project");
+        let original = provider.token().await.unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(3601)).await;
+        let refreshed = provider.token().await.unwrap();
+        assert_ne!(original, refreshed);
+        assert!(requests.load(Ordering::SeqCst) >= 2);
+        server.abort();
+    }
 
     #[rstest::rstest]
     #[case::canonical_endpoint(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#, true)]

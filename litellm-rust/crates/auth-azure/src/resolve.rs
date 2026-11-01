@@ -237,7 +237,12 @@ pub(crate) fn select_auth_plan(
         return Ok(AzureCredentialPlan::Missing);
     }
 
-    select_native_plan(
+    let probe_imds = selector
+        .as_ref()
+        .is_none_or(|selector| *selector.value() == AzureCredentialType::DefaultAzureCredential)
+        && env_lookup("IDENTITY_ENDPOINT").is_none()
+        && env_lookup("MSI_ENDPOINT").is_none();
+    match select_native_plan(
         selector,
         tenant_id,
         client_id,
@@ -245,7 +250,15 @@ pub(crate) fn select_auth_plan(
         scope,
         authority,
         inputs.enable_azure_ad_token_refresh.source(),
-    )
+    )? {
+        AzureCredentialPlan::Chain(requests) => Ok(AzureCredentialPlan::Chain(
+            requests
+                .into_iter()
+                .map(|request| request.with_imds_probe(probe_imds))
+                .collect(),
+        )),
+        plan => Ok(plan),
+    }
 }
 
 fn select_native_plan(
@@ -688,6 +701,93 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, Some(SecretValue::new("rotated-assertion")));
+    }
+
+    #[derive(Debug)]
+    struct UnavailableImdsClient;
+
+    impl azure_core::http::HttpClient for UnavailableImdsClient {
+        fn execute_request<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _request: &'life1 azure_core::http::Request,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = azure_core::Result<azure_core::http::AsyncRawResponse>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    struct OfflineChainAcquirer(super::NativeAzureTokenAcquirer);
+
+    impl AzureTokenAcquirer for OfflineChainAcquirer {
+        fn acquire(
+            &self,
+            request: ValidatedAzureRequest,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>
+        {
+            Box::pin(async move {
+                if request.kind() == "developer-tools" {
+                    return Ok(ResolvedCredential::AccessToken {
+                        token: SecretValue::new("cli-token"),
+                        expires_on: None,
+                    });
+                }
+                self.0.acquire(request).await
+            })
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::default_off_azure("DefaultAzureCredential", None, true)]
+    #[case::explicit_managed_identity("ManagedIdentityCredential", None, false)]
+    #[case::app_service("DefaultAzureCredential", Some("http://app-service.test"), false)]
+    #[tokio::test(start_paused = true)]
+    async fn only_default_imds_discovery_is_bounded(
+        #[case] selector: &str,
+        #[case] identity_endpoint: Option<&str>,
+        #[case] expect_cli: bool,
+    ) {
+        let native = super::NativeAzureTokenAcquirer::with_transport(
+            4,
+            azure_core::http::Transport::new(Arc::new(UnavailableImdsClient)),
+        );
+        let service = AzureAuthService::with_acquirer(Arc::new(OfflineChainAcquirer(native)));
+        let inputs = AzureAuthInputs {
+            azure_credential: crate::types::ConfigValue::Value(Sourced::new(
+                selector.into(),
+                InputSource::Deployment,
+            )),
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Default::default()
+        };
+        let environment = |name: &str| {
+            (name == "IDENTITY_ENDPOINT")
+                .then_some(identity_endpoint)
+                .flatten()
+                .map(str::to_string)
+        };
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            service.get_azure_ad_token(&inputs, &environment),
+        )
+        .await;
+
+        assert_eq!(outcome.is_ok(), expect_cli);
+        if expect_cli {
+            assert_eq!(
+                outcome.unwrap().unwrap().unwrap().value().secret().expose(),
+                "cli-token"
+            );
+        }
     }
 
     #[tokio::test]

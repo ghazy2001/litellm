@@ -217,6 +217,31 @@ pub fn classify_auth(
     AwsAuthFlow::DefaultChain
 }
 
+async fn profile_credentials(
+    name: &str,
+    region: Option<String>,
+    config: aws_config::provider_config::ProviderConfig,
+    builder: aws_config::profile::credentials::Builder,
+) -> Result<Credentials, Error> {
+    let region = match region {
+        Some(region) => Some(aws_types::region::Region::new(region)),
+        None => {
+            aws_config::default_provider::region::DefaultRegionChain::builder()
+                .profile_name(name)
+                .build()
+                .region()
+                .await
+        }
+    };
+    builder
+        .configure(&config.with_region(region))
+        .profile_name(name)
+        .build()
+        .provide_credentials()
+        .await
+        .map_err(Error::credentials(CredentialFlow::Profile))
+}
+
 impl AwsAuthService {
     pub async fn resolve_credentials(
         &self,
@@ -266,13 +291,13 @@ impl AwsAuthService {
                 Ok(credentials)
             }
             AwsAuthFlow::Profile { name } => {
-                let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
-                    .profile_name(name)
-                    .build();
-                provider
-                    .provide_credentials()
-                    .await
-                    .map_err(Error::credentials(CredentialFlow::Profile))
+                profile_credentials(
+                    &name,
+                    resolved.region_name,
+                    aws_config::provider_config::ProviderConfig::without_region(),
+                    aws_config::profile::ProfileFileCredentialsProvider::builder(),
+                )
+                .await
             }
             AwsAuthFlow::AssumeRole { role, session_name } => {
                 if is_already_running_as_role(&role, &resolved).await? {
@@ -739,6 +764,63 @@ mod tests {
         assert_eq!(credentials.access_key_id(), "process-access");
         assert_eq!(credentials.secret_access_key(), "process-secret");
         assert_eq!(credentials.session_token(), Some("process-session"));
+    }
+
+    #[derive(Debug)]
+    struct StsConnector;
+
+    impl aws_smithy_runtime_api::client::http::HttpConnector for StsConnector {
+        fn call(
+            &self,
+            request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+        ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
+            assert!(request.uri().contains("sts.us-west-2."));
+            aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async {
+                Ok(
+                    aws_smithy_runtime_api::client::orchestrator::HttpResponse::new(
+                        200_u16.try_into().unwrap(),
+                        aws_smithy_types::body::SdkBody::from(
+                            r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+                        <AssumeRoleResult><Credentials>
+                        <AccessKeyId>role-access</AccessKeyId><SecretAccessKey>role-secret</SecretAccessKey>
+                        <SessionToken>role-session</SessionToken><Expiration>2100-01-01T00:00:00Z</Expiration>
+                        </Credentials><AssumedRoleUser><Arn>arn:aws:sts::123456789012:assumed-role/smoke/session</Arn>
+                        <AssumedRoleId>smoke:session</AssumedRoleId></AssumedRoleUser></AssumeRoleResult>
+                        <ResponseMetadata><RequestId>smoke</RequestId></ResponseMetadata></AssumeRoleResponse>"#,
+                        ),
+                    ),
+                )
+            })
+        }
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn role_profile_uses_region_when_acquiring_sts_credentials() {
+        use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
+        let files = aws_runtime::env_config::file::EnvConfigFiles::builder()
+            .include_default_config_file(false)
+            .include_default_credentials_file(false)
+            .with_contents(
+                aws_runtime::env_config::file::EnvConfigFileKind::Config,
+                "[profile smoke]\nrole_arn = arn:aws:iam::123456789012:role/smoke\nsource_profile = source\n\n[profile source]\naws_access_key_id = source-access\naws_secret_access_key = source-secret\n",
+            ).build();
+        let config = aws_config::provider_config::ProviderConfig::without_region()
+            .with_http_client(http_client_fn(|_, _| {
+                SharedHttpConnector::new(StsConnector)
+            }));
+        let credentials = profile_credentials(
+            "smoke",
+            Some("us-west-2".into()),
+            config,
+            aws_config::profile::ProfileFileCredentialsProvider::builder().profile_files(files),
+        )
+        .await
+        .unwrap();
+        assert_eq!(credentials.access_key_id(), "role-access");
+        assert_eq!(credentials.secret_access_key(), "role-secret");
+        assert_eq!(credentials.session_token(), Some("role-session"));
+        assert!(credentials.expiry().is_some());
     }
 
     fn no_env(_: &str) -> Option<String> {

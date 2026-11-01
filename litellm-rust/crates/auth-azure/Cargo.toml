@@ -13,6 +13,7 @@ moka.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 strum.workspace = true
+tokio.workspace = true
 url.workspace = true
 
 azure_core = "1.0.0"
@@ -21,4 +22,4 @@ azure_identity = { version = "1.0.0", features = ["tokio"] }
 [dev-dependencies]
 litellm-error.workspace = true
 rstest.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

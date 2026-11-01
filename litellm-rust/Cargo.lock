@@ -3393,6 +3393,7 @@ dependencies = [
  "aws-sdk-sts",
  "aws-sigv4",
  "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "aws-types",
  "bytes",
  "futures-util",
@@ -3433,6 +3434,7 @@ dependencies = [
 name = "litellm-auth-gcp"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "gcp_auth",
  "google-cloud-auth",
@@ -3442,6 +3444,7 @@ dependencies = [
  "litellm-secret-value",
  "moka",
  "rstest",
+ "rustls 0.23.42",
  "serde",
  "serde_json",
  "sha2 0.10.9",
