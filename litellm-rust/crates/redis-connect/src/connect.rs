@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use std::sync::Arc;
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig};
@@ -25,6 +27,9 @@ pub struct HostServices {
     pub environment: SharedEnvironment,
 }
 
+// litellm/constants.py REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, the default _redis.py sets for cluster clients only
+const CLUSTER_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(25);
+
 pub fn connect(resolved: ResolvedRedis, host: HostServices) -> Result<RedisClient, Error> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -43,6 +48,13 @@ pub fn connect(resolved: ResolvedRedis, host: HostServices) -> Result<RedisClien
             }),
         )
     });
+    let health_check = match &resolved.endpoint {
+        RedisEndpoint::Cluster(_) => resolved
+            .health_check_interval
+            .or(Some(CLUSTER_HEALTH_CHECK_INTERVAL)),
+        _ => resolved.health_check_interval,
+    }
+    .filter(|interval| !interval.is_zero());
     Ok(RedisClient::new(RedisConfig {
         endpoint: endpoint(resolved.endpoint),
         credentials,
@@ -53,6 +65,7 @@ pub fn connect(resolved: ResolvedRedis, host: HostServices) -> Result<RedisClien
         ),
         breaker,
         events,
+        health_check,
     })?)
 }
 

@@ -2066,6 +2066,7 @@ def _resolve_like_the_rust_resolver(
         "auth": _resolved_auth(client_kwargs),
         "socket_timeout": client_kwargs.get("socket_timeout"),
         "socket_connect_timeout": client_kwargs.get("socket_connect_timeout"),
+        "health_check_interval": float(interval) if (interval := client_kwargs.get("health_check_interval")) else None,
     }
 
 
@@ -2080,6 +2081,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2093,6 +2095,7 @@ def _resolve_like_the_rust_resolver(
         pytest.param(
             {
                 "db": 2,
+                "health_check_interval": None,
                 "host": "redis",
                 "password": "pass",
                 "port": 6380,
@@ -2104,6 +2107,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": "pass", "username": "user"},
                 "db": 2,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2131,6 +2135,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": "environment-secret", "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "environment",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2153,6 +2158,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 3,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2169,6 +2175,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2184,6 +2191,7 @@ def _resolve_like_the_rust_resolver(
             {"REDIS_URL": "redis://environment:6379/1"},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2197,6 +2205,7 @@ def _resolve_like_the_rust_resolver(
             {"REDIS_HOST": "ignored", "REDIS_URL": "redis://from-url:6379"},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2211,6 +2220,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "configured",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2222,10 +2232,18 @@ def _resolve_like_the_rust_resolver(
             id="an_explicit_host_drops_the_environment_url",
         ),
         pytest.param(
-            {"db": 4, "host": "dropped", "password": "dropped", "url": "rediss://cache:6380", "username": "user"},
+            {
+                "db": 4,
+                "health_check_interval": None,
+                "host": "dropped",
+                "password": "dropped",
+                "url": "rediss://cache:6380",
+                "username": "user",
+            },
             {},
             {
                 "auth": {"kind": "static", "password": None, "username": "user"},
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2250,6 +2268,7 @@ def _resolve_like_the_rust_resolver(
             {},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2273,6 +2292,7 @@ def _resolve_like_the_rust_resolver(
             {},
             {
                 "auth": {"kind": "static", "password": "cluster-secret", "username": None},
+                "health_check_interval": None,
                 "mode": "cluster",
                 "nodes": ["node-a:7000"],
                 "socket_connect_timeout": None,
@@ -2286,6 +2306,7 @@ def _resolve_like_the_rust_resolver(
             {"REDIS_CLUSTER_NODES": '[{"host": "node-a", "port": "7000"}, {"host": "node-b", "port": 7001}]'},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "cluster",
                 "nodes": ["node-a:7000", "node-b:7001"],
                 "socket_connect_timeout": None,
@@ -2304,6 +2325,7 @@ def _resolve_like_the_rust_resolver(
             {},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "cluster",
                 "nodes": ["node-a:7000"],
                 "socket_connect_timeout": None,
@@ -2329,6 +2351,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": "data-secret", "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "mode": "sentinel",
                 "nodes": ["sentinel-a:26379", "sentinel-b:26380"],
                 "sentinel_password": "sentinel-secret",
@@ -2349,6 +2372,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "mode": "sentinel",
                 "nodes": ["sentinel-a:26379"],
                 "sentinel_password": "sentinel-secret",
@@ -2365,6 +2389,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "mode": "sentinel",
                 "nodes": ["sentinel-a:26379"],
                 "sentinel_password": None,
@@ -2380,6 +2405,7 @@ def _resolve_like_the_rust_resolver(
             {},
             {
                 "auth": {"kind": "static", "password": None, "username": None},
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2400,6 +2426,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "host"},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2419,6 +2446,7 @@ def _resolve_like_the_rust_resolver(
                     "service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com",
                 },
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2441,6 +2469,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "gcp_iam", "service_account": "account"},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2471,6 +2500,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "azure_ad", "username": "environment-user"},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2493,6 +2523,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "azure_ad", "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2515,6 +2546,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2544,6 +2576,7 @@ def _resolve_like_the_rust_resolver(
                     "user_name": "iam-user",
                 },
                 "db": 0,
+                "health_check_interval": None,
                 "host": "cache-1",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2578,6 +2611,7 @@ def _resolve_like_the_rust_resolver(
                     "user_name": "iam-user",
                 },
                 "db": 0,
+                "health_check_interval": None,
                 "host": "cache-1",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2612,6 +2646,7 @@ def _resolve_like_the_rust_resolver(
                     "serverless": True,
                     "user_name": "iam-user",
                 },
+                "health_check_interval": None,
                 "mode": "url",
                 "socket_connect_timeout": None,
                 "socket_timeout": 5.0,
@@ -2662,6 +2697,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2684,6 +2720,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2706,6 +2743,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2722,6 +2760,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": "referenced-secret", "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "referenced",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2744,6 +2783,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2766,6 +2806,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2782,6 +2823,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2798,6 +2840,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2814,6 +2857,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2830,6 +2874,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2846,6 +2891,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2862,6 +2908,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": None,
@@ -2878,6 +2925,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "unix_socket_path": "/tmp/redis.sock",
@@ -2898,6 +2946,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "port": 6379,
@@ -2920,6 +2969,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "port": 6379,
@@ -2942,6 +2992,7 @@ def _resolve_like_the_rust_resolver(
             {
                 "auth": {"kind": "static", "password": None, "username": None},
                 "db": 0,
+                "health_check_interval": None,
                 "host": "redis",
                 "mode": "host",
                 "port": 6379,
@@ -2963,6 +3014,40 @@ def _resolve_like_the_rust_resolver(
             {},
             None,
             id="unix_socket_path_without_a_host_fails_like_python",
+        ),
+        pytest.param(
+            {"health_check_interval": "7", "host": "redis"},
+            {},
+            {
+                "auth": {"kind": "static", "password": None, "username": None},
+                "db": 0,
+                "health_check_interval": 7.0,
+                "host": "redis",
+                "mode": "host",
+                "port": 6379,
+                "socket_connect_timeout": None,
+                "socket_timeout": 5.0,
+                "tls": None,
+                "unix_socket_path": None,
+            },
+            id="health_check_interval_is_whole_seconds",
+        ),
+        pytest.param(
+            {"health_check_interval": 0, "host": "redis"},
+            {},
+            {
+                "auth": {"kind": "static", "password": None, "username": None},
+                "db": 0,
+                "health_check_interval": None,
+                "host": "redis",
+                "mode": "host",
+                "port": 6379,
+                "socket_connect_timeout": None,
+                "socket_timeout": 5.0,
+                "tls": None,
+                "unix_socket_path": None,
+            },
+            id="health_check_interval_zero_is_off",
         ),
     ),
 )

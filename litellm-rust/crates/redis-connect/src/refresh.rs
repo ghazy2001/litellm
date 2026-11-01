@@ -338,6 +338,7 @@ mod tests {
             timeouts: Timeouts::default(),
             breaker: None,
             events: None,
+            health_check: None,
         })
         .unwrap();
         client.set("k", "1", Duration::from_secs(60)).await.unwrap();
@@ -427,6 +428,7 @@ mod tests {
             timeouts: Timeouts::new(Duration::from_secs(1), None),
             breaker: None,
             events: None,
+            health_check: None,
         })
         .unwrap();
         client
