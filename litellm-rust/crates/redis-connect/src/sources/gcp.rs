@@ -50,7 +50,7 @@ impl CredentialSource for GcpIam {
                 .access_token(GcpCredentialSource::from_environment(&lookup))
                 .await
                 .map_err(Error::credential(CredentialStage::Identity))?;
-            let reply: AccessToken = self
+            let response = self
                 .http
                 .post(format!(
                     "{IAM_CREDENTIALS}/{}:generateAccessToken",
@@ -60,11 +60,18 @@ impl CredentialSource for GcpIam {
                 .json(&serde_json::json!({ "scope": [CLOUD_PLATFORM_SCOPE] }))
                 .send()
                 .await
-                .map_err(Error::credential(CredentialStage::Exchange))?
+                .map_err(Error::credential(CredentialStage::Exchange))?;
+            let status = response.status().as_u16();
+            let reply: AccessToken = response
                 .error_for_status()
-                .map_err(Error::credential(CredentialStage::Exchange))?
+                .map_err(litellm_http::Error::from)
+                .map_err(Error::credential_response(
+                    CredentialStage::Exchange,
+                    status,
+                ))?
                 .json()
                 .await
+                .map_err(litellm_http::Error::from)
                 .map_err(Error::credential(CredentialStage::Response))?;
             let expires_at = time::OffsetDateTime::parse(
                 &reply.expire_time,

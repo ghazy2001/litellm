@@ -192,7 +192,7 @@ async fn refresh(source: impl CredentialSource, sender: watch::Sender<Latest>) {
                 wait
             }
             Err(error) => {
-                tracing::warn!(failure = error.kind(), retry_in = ?retry, "fetching Redis credentials failed");
+                tracing::warn!(failure = error.kind(), upstream_status = error.upstream_status(), retry_in = ?retry, "fetching Redis credentials failed");
                 if !matches!(*sender.borrow(), Latest::Ready { .. }) {
                     sender.send_replace(Latest::Unavailable(Arc::new(error)));
                 }
@@ -465,9 +465,30 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::PermissionDenied
         );
+        let debug = format!("{error:?}");
+        assert!(!debug.contains("credential-value"));
+        assert!(debug.contains("[REDACTED]"));
         let public = super::public_error(&error).to_string();
         assert!(public.contains("caller identity"));
         assert!(!public.contains("credential-value"));
+    }
+
+    #[rstest]
+    fn credential_http_failures_expose_status_without_exposing_the_response_body() {
+        let error = crate::Error::credential_response(crate::CredentialStage::Exchange, 503)(
+            litellm_http::Error::upstream(503, "credential-value".into()),
+        );
+        let public = super::public_error(&error).to_string();
+        assert!(public.contains("HTTP 503"));
+        assert!(!public.contains("credential-value"));
+        assert_eq!(
+            litellm_error::find::<litellm_http::Error>(&error)
+                .unwrap()
+                .upstream_response()
+                .unwrap()
+                .0,
+            503
+        );
     }
 
     fn endpoint(deployment: &RedisDeployment) -> Endpoint {

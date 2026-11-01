@@ -1,4 +1,4 @@
-#[derive(Debug, thiserror::Error)]
+#[derive(veil::Redact, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Connect(#[from] litellm_redis_client::ConnectError),
@@ -6,10 +6,12 @@ pub enum Error {
         "Redis setting credential_provider names a Python object, which this host cannot supply"
     )]
     NoHostCredentialProvider,
-    #[error("{stage} failed")]
+    #[error("{stage} failed{}", http_status_suffix(*http_status))]
     Credential {
         stage: CredentialStage,
+        http_status: Option<u16>,
         #[source]
+        #[redact(with = "[REDACTED]")]
         cause: litellm_error::Source,
     },
     #[error("credential acquisition exceeded {timeout:?}")]
@@ -42,7 +44,30 @@ impl Error {
     ) -> impl FnOnce(E) -> Self {
         move |cause| Self::Credential {
             stage,
+            http_status: None,
             cause: litellm_error::Source::new(cause),
+        }
+    }
+
+    pub(crate) fn credential_response(
+        stage: CredentialStage,
+        status: u16,
+    ) -> impl FnOnce(litellm_http::Error) -> Self {
+        move |cause| Self::Credential {
+            stage,
+            http_status: Some(status),
+            cause: litellm_error::Source::new(cause),
+        }
+    }
+
+    pub(crate) fn upstream_status(&self) -> Option<u16> {
+        match self {
+            Self::Credential { http_status, .. } => *http_status,
+            Self::Connect(_)
+            | Self::NoHostCredentialProvider
+            | Self::CredentialTimeout { .. }
+            | Self::ExpiredCredential
+            | Self::MissingCredential { .. } => None,
         }
     }
 
@@ -61,4 +86,8 @@ impl Error {
             Self::MissingCredential { .. } => "missing-credential",
         }
     }
+}
+
+fn http_status_suffix(status: Option<u16>) -> String {
+    status.map_or_else(String::new, |status| format!(" (HTTP {status})"))
 }
