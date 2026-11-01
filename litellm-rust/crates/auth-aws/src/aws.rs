@@ -703,6 +703,44 @@ mod tests {
     use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
     use reqwest::header::CONTENT_TYPE;
 
+    #[cfg(unix)]
+    #[rstest::fixture]
+    fn process_profile() -> aws_runtime::env_config::file::EnvConfigFiles {
+        let credentials = serde_json::json!({
+            "Version": 1,
+            "AccessKeyId": "process-access",
+            "SecretAccessKey": "process-secret",
+            "SessionToken": "process-session",
+        });
+        aws_runtime::env_config::file::EnvConfigFiles::builder()
+            .include_default_config_file(false)
+            .include_default_credentials_file(false)
+            .with_contents(
+                aws_runtime::env_config::file::EnvConfigFileKind::Config,
+                format!(
+                    "[profile smoke]\ncredential_process = /usr/bin/printf '%s' '{credentials}'\n"
+                ),
+            )
+            .build()
+    }
+
+    #[cfg(unix)]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn profile_process_credentials_can_be_loaded(
+        process_profile: aws_runtime::env_config::file::EnvConfigFiles,
+    ) {
+        let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
+            .profile_name("smoke")
+            .profile_files(process_profile)
+            .build();
+        let credentials = provider.provide_credentials().await.unwrap();
+
+        assert_eq!(credentials.access_key_id(), "process-access");
+        assert_eq!(credentials.secret_access_key(), "process-secret");
+        assert_eq!(credentials.session_token(), Some("process-session"));
+    }
+
     fn no_env(_: &str) -> Option<String> {
         None
     }

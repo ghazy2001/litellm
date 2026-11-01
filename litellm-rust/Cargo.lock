@@ -3389,6 +3389,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
+ "aws-runtime",
  "aws-sdk-sts",
  "aws-sigv4",
  "aws-smithy-runtime-api",

@@ -1,4 +1,5 @@
 mod aws;
+mod azure;
 mod gcp;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
