@@ -25,6 +25,7 @@ google-cloud-auth.workspace = true
 http = { workspace = true, optional = true }
 
 [dev-dependencies]
+time = { workspace = true, features = ["formatting"] }
 axum = { workspace = true, features = ["json"] }
 litellm-error.workspace = true
 rstest.workspace = true

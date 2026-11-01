@@ -1,7 +1,11 @@
 use std::time::SystemTime;
 
-use litellm_auth_gcp::{VertexAuth, VertexConfig};
+use litellm_auth_gcp::{CredentialSource as GcpCredentialSource, GcpAuth};
 use serde::Deserialize;
+
+use crate::Error;
+use crate::error::CredentialStage;
+use litellm_secret_value::SecretValue;
 
 use crate::{CredentialSource, Expiring, SharedEnvironment, SourceFuture};
 
@@ -10,7 +14,7 @@ const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platfo
 
 pub(crate) struct GcpIam {
     http: litellm_http::Client,
-    identity: VertexAuth,
+    identity: GcpAuth,
     service_account: String,
     lookup: SharedEnvironment,
 }
@@ -30,7 +34,7 @@ impl GcpIam {
     ) -> Self {
         Self {
             http,
-            identity: VertexAuth::default(),
+            identity: GcpAuth::default(),
             service_account,
             lookup,
         }
@@ -43,31 +47,35 @@ impl CredentialSource for GcpIam {
             let lookup = |name: &str| self.lookup.get(name);
             let caller = self
                 .identity
-                .access_token(&VertexConfig::new(None, None, None), &lookup)
-                .await?;
+                .access_token(GcpCredentialSource::from_environment(&lookup))
+                .await
+                .map_err(Error::credential(CredentialStage::Identity))?;
             let reply: AccessToken = self
                 .http
                 .post(format!(
                     "{IAM_CREDENTIALS}/{}:generateAccessToken",
                     self.service_account
                 ))
-                .bearer_auth(caller)
+                .bearer_auth(caller.expose())
                 .json(&serde_json::json!({ "scope": [CLOUD_PLATFORM_SCOPE] }))
                 .send()
-                .await?
-                .error_for_status()?
+                .await
+                .map_err(Error::credential(CredentialStage::Exchange))?
+                .error_for_status()
+                .map_err(Error::credential(CredentialStage::Exchange))?
                 .json()
-                .await?;
+                .await
+                .map_err(Error::credential(CredentialStage::Response))?;
             let expires_at = time::OffsetDateTime::parse(
                 &reply.expire_time,
                 &time::format_description::well_known::Rfc3339,
             )
-            .ok()
-            .map(SystemTime::from);
+            .map(SystemTime::from)
+            .map_err(Error::credential(CredentialStage::Response))?;
             Ok(Expiring {
                 username: None,
-                password: reply.access_token,
-                expires_at,
+                password: SecretValue::new(reply.access_token),
+                expires_at: Some(expires_at),
             })
         })
     }

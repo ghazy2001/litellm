@@ -1,6 +1,6 @@
 mod support;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use litellm_redis_testing::ClientConnection;
 use litellm_redis_testing::{RedisDeployment, RedisSentinel, SERVICE_NAME, Topology, eventually};
@@ -42,9 +42,7 @@ async fn a_pushed_credential_reauthenticates_the_live_connection_and_a_reconnect
     provider.rotate("bob", "second");
     let rotated = eventually(async || {
         let now = connections(&server).await;
-        now.iter()
-            .all(|connection| connection.user == "bob")
-            .then_some(now)
+        (users(&now) == BTreeSet::from(["bob"])).then_some(now)
     })
     .await;
     server
@@ -59,19 +57,18 @@ async fn a_pushed_credential_reauthenticates_the_live_connection_and_a_reconnect
 
     let reconnected = connections(&server).await;
 
-    assert!(
-        before.iter().all(|connection| connection.user == "alice"),
-        "{before:?}"
-    );
+    assert_eq!(users(&before), BTreeSet::from(["alice"]));
     assert_eq!(ids(&rotated), ids(&before));
     assert_eq!(after_reconnect, "1");
     assert!(!reconnected.is_empty());
-    assert!(
-        reconnected
-            .iter()
-            .all(|connection| connection.user == "bob"),
-        "{reconnected:?}"
-    );
+    assert_eq!(users(&reconnected), BTreeSet::from(["bob"]));
+}
+
+fn users(connections: &[ClientConnection]) -> BTreeSet<&str> {
+    connections
+        .iter()
+        .map(|connection| connection.user.as_str())
+        .collect()
 }
 
 fn ids(connections: &[ClientConnection]) -> Vec<(u16, u64)> {

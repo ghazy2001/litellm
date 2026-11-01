@@ -3,6 +3,10 @@ use std::time::{Duration, SystemTime};
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, SigningScope, presign_url};
 use litellm_config::AwsIamAuth;
 
+use crate::Error;
+use crate::error::CredentialStage;
+use litellm_secret_value::SecretValue;
+
 use crate::{CredentialSource, Expiring, SharedEnvironment, SourceFuture};
 
 const SERVICE: &str = "elasticache";
@@ -48,8 +52,15 @@ impl CredentialSource for ElastiCacheIam {
             let lookup = |name: &str| self.lookup.get(name);
             let credentials = self
                 .service
-                .resolve_credentials(AwsAuthConfig::default(), &lookup)
-                .await?;
+                .resolve_credentials(
+                    AwsAuthConfig {
+                        region_name: Some(self.auth.region.clone()),
+                        ..Default::default()
+                    },
+                    &lookup,
+                )
+                .await
+                .map_err(Error::credential(CredentialStage::Identity))?;
             let now = SystemTime::now();
             let signed = presign_url(
                 &connect_url(&self.auth),
@@ -60,11 +71,12 @@ impl CredentialSource for ElastiCacheIam {
                     credentials: &credentials,
                     time: now,
                 },
-            )?;
+            )
+            .map_err(Error::credential(CredentialStage::Signing))?;
             let token_expiry = now + TOKEN_LIFETIME;
             Ok(Expiring {
                 username: Some(self.auth.user_name.clone()),
-                password: signed.trim_start_matches("https://").to_owned(),
+                password: SecretValue::new(signed.trim_start_matches("https://")),
                 expires_at: Some(
                     credentials
                         .expiry()

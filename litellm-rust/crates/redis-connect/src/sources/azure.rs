@@ -2,6 +2,9 @@ use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, ResolvedCredential, Sourced};
 use litellm_config::AzureAdAuth;
 
+use crate::Error;
+use crate::error::CredentialStage;
+
 use crate::{CredentialSource, Expiring, SourceFuture};
 
 const AZURE_REDIS_SCOPE: &str = "https://redis.azure.com/.default";
@@ -47,8 +50,9 @@ impl CredentialSource for AzureAd {
             let credential = self
                 .service
                 .get_azure_ad_token(&self.inputs, &|_| None)
-                .await?
-                .ok_or("no Azure credential is available for Redis")?
+                .await
+                .map_err(Error::credential(CredentialStage::Identity))?
+                .ok_or(Error::MissingCredential { provider: "Azure" })?
                 .into_value();
             let (token, expires_at) = match credential {
                 ResolvedCredential::AccessToken { token, expires_on } => (token, expires_on),
@@ -56,7 +60,7 @@ impl CredentialSource for AzureAd {
             };
             Ok(Expiring {
                 username: self.username.clone(),
-                password: token.expose().to_owned(),
+                password: token,
                 expires_at,
             })
         })

@@ -1,5 +1,5 @@
 use std::{
-    future::Future,
+    future::{Future, pending},
     pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
@@ -7,25 +7,26 @@ use std::{
 
 use futures_util::{Stream, stream};
 use litellm_redis_client::{BasicAuth, RedisError, StreamingCredentialsProvider};
-use tokio::sync::watch;
+use litellm_secret_value::SecretValue;
+use tokio::{sync::watch, time::Instant};
+
+use crate::Error;
 
 const TOKEN_ONLY_USERNAME: &str = "default";
 const UNKNOWN_LIFETIME: Duration = Duration::from_secs(300);
 const MIN_REFRESH: Duration = Duration::from_secs(1);
+const ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const FIRST_RETRY: Duration = Duration::from_secs(1);
 const MAX_RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Expiring {
     pub username: Option<String>,
-    pub password: String,
+    pub password: SecretValue,
     pub expires_at: Option<SystemTime>,
 }
 
-pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
-
-pub type SourceFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Expiring, SourceError>> + Send + 'a>>;
+pub type SourceFuture<'a> = Pin<Box<dyn Future<Output = Result<Expiring, Error>> + Send + 'a>>;
 
 pub trait CredentialSource: Send + Sync + 'static {
     fn fetch(&self) -> SourceFuture<'_>;
@@ -34,8 +35,11 @@ pub trait CredentialSource: Send + Sync + 'static {
 #[derive(Clone)]
 enum Latest {
     Pending,
-    Ready(BasicAuth),
-    Unavailable(Arc<str>),
+    Ready {
+        credentials: BasicAuth,
+        expires_at: Option<Instant>,
+    },
+    Unavailable(Arc<Error>),
 }
 
 type Start = Box<dyn FnOnce() + Send>;
@@ -89,16 +93,20 @@ impl StreamingCredentialsProvider for RefreshingCredentials {
                             receiver.changed().await.ok()?;
                             receiver.mark_changed();
                         }
-                        Latest::Ready(credentials) => {
-                            return Some((Ok(credentials), (receiver, false)));
+                        Latest::Ready {
+                            credentials,
+                            expires_at,
+                        } => {
+                            let result = match expires_at {
+                                Some(deadline) if deadline <= Instant::now() => {
+                                    Err(public_error(&Error::ExpiredCredential))
+                                }
+                                _ => Ok(credentials),
+                            };
+                            return Some((result, (receiver, false)));
                         }
-                        Latest::Unavailable(reason) => {
-                            let error = RedisError::from((
-                                litellm_redis_client::RedisErrorKind::AuthenticationFailed,
-                                "fetching Redis credentials failed",
-                                reason.to_string(),
-                            ));
-                            return Some((Err(error), (receiver, false)));
+                        Latest::Unavailable(error) => {
+                            return Some((Err(public_error(&error)), (receiver, false)));
                         }
                     }
                 }
@@ -107,34 +115,97 @@ impl StreamingCredentialsProvider for RefreshingCredentials {
     }
 }
 
+fn public_error(error: &Error) -> RedisError {
+    RedisError::from((
+        litellm_redis_client::RedisErrorKind::AuthenticationFailed,
+        "fetching Redis credentials failed",
+        error.to_string(),
+    ))
+}
+
+async fn while_valid<T>(
+    future: impl Future<Output = T>,
+    sender: &watch::Sender<Latest>,
+    expires_at: &mut Option<Instant>,
+) -> Option<T> {
+    tokio::pin!(future);
+    loop {
+        let expiration = async {
+            match *expires_at {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            () = sender.closed() => return None,
+            () = expiration => {
+                *expires_at = None;
+                sender.send_replace(Latest::Unavailable(Arc::new(Error::ExpiredCredential)));
+            }
+            result = &mut future => return Some(result),
+        }
+    }
+}
+
 async fn refresh(source: impl CredentialSource, sender: watch::Sender<Latest>) {
     let mut retry = FIRST_RETRY;
+    let mut expires_at = None;
     loop {
-        let wait = match source.fetch().await {
+        let acquisition = async {
+            tokio::time::timeout(ACQUISITION_TIMEOUT, source.fetch())
+                .await
+                .map_err(|cause| Error::CredentialTimeout {
+                    timeout: ACQUISITION_TIMEOUT,
+                    cause,
+                })?
+                .and_then(|credentials| {
+                    if credentials
+                        .expires_at
+                        .is_some_and(|expiry| expiry <= SystemTime::now())
+                    {
+                        return Err(Error::ExpiredCredential);
+                    }
+                    Ok(credentials)
+                })
+        };
+        let Some(result) = while_valid(acquisition, &sender, &mut expires_at).await else {
+            return;
+        };
+        let wait = match result {
             Ok(credentials) => {
                 retry = FIRST_RETRY;
-                let wait = refresh_after(credentials.expires_at, SystemTime::now());
-                sender.send_replace(Latest::Ready(BasicAuth::new(
-                    credentials
-                        .username
-                        .unwrap_or_else(|| TOKEN_ONLY_USERNAME.to_owned()),
-                    credentials.password,
-                )));
+                let now = SystemTime::now();
+                let wait = refresh_after(credentials.expires_at, now);
+                expires_at = credentials
+                    .expires_at
+                    .map(|expiry| Instant::now() + expiry.duration_since(now).unwrap_or_default());
+                sender.send_replace(Latest::Ready {
+                    credentials: BasicAuth::new(
+                        credentials
+                            .username
+                            .unwrap_or_else(|| TOKEN_ONLY_USERNAME.to_owned()),
+                        credentials.password.expose().to_owned(),
+                    ),
+                    expires_at,
+                });
                 wait
             }
             Err(error) => {
-                tracing::warn!(error = %error, retry_in = ?retry, "fetching Redis credentials failed");
-                if !matches!(*sender.borrow(), Latest::Ready(_)) {
-                    sender.send_replace(Latest::Unavailable(error.to_string().into()));
+                tracing::warn!(failure = error.kind(), retry_in = ?retry, "fetching Redis credentials failed");
+                if !matches!(*sender.borrow(), Latest::Ready { .. }) {
+                    sender.send_replace(Latest::Unavailable(Arc::new(error)));
                 }
                 let wait = retry;
                 retry = (retry * 2).min(MAX_RETRY);
                 wait
             }
         };
-        tokio::select! {
-            () = sender.closed() => return,
-            () = tokio::time::sleep(wait) => {}
+        if while_valid(tokio::time::sleep(wait), &sender, &mut expires_at)
+            .await
+            .is_none()
+        {
+            return;
         }
     }
 }
@@ -159,16 +230,15 @@ mod tests {
 
     use futures_util::StreamExt;
     use litellm_redis_client::StreamingCredentialsProvider;
+    use litellm_secret_value::SecretValue;
     use rstest::rstest;
 
+    use super::{CredentialSource, Expiring, RefreshingCredentials, SourceFuture, refresh_after};
     use litellm_redis_client::{
         ClusterEndpoint, ClusterNode, Credentials, CredentialsProvider, Endpoint, Namespace,
         RedisClient, RedisConfig, Timeouts, TlsOptions,
     };
     use litellm_redis_testing::{ClientConnection, RedisDeployment, Topology, eventually};
-    use litellm_secret_value::SecretValue;
-
-    use super::{CredentialSource, Expiring, RefreshingCredentials, SourceFuture, refresh_after};
 
     #[rstest]
     #[case::three_quarters_of_the_lifetime(
@@ -198,14 +268,20 @@ mod tests {
         fn fetch(&self) -> SourceFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let reply = self.replies.lock().unwrap().remove(0);
-            Box::pin(async move { reply.map_err(Into::into) })
+            Box::pin(async move {
+                reply.map_err(|reason| {
+                    crate::Error::credential(crate::error::CredentialStage::Identity)(
+                        std::io::Error::other(reason),
+                    )
+                })
+            })
         }
     }
 
     fn token(password: &str, lifetime: Duration) -> Result<Expiring, &'static str> {
         Ok(Expiring {
             username: None,
-            password: password.to_owned(),
+            password: SecretValue::new(password),
             expires_at: Some(SystemTime::now() + lifetime),
         })
     }
@@ -216,7 +292,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = RefreshingCredentials::new(Scripted {
             replies: Mutex::new(vec![
-                token("first", Duration::from_secs(4)),
+                token("first", Duration::from_secs(8)),
                 Err("token endpoint down"),
                 token("second", Duration::from_secs(3600)),
             ]),
@@ -270,6 +346,130 @@ mod tests {
         assert_eq!(stream.next().await.unwrap().unwrap().password(), "late");
     }
 
+    struct Blocking {
+        first: Mutex<Option<Expiring>>,
+        started: Arc<tokio::sync::Notify>,
+        cancelled: Arc<AtomicUsize>,
+    }
+
+    struct Cancellation(Arc<AtomicUsize>);
+
+    impl Drop for Cancellation {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl CredentialSource for Blocking {
+        fn fetch(&self) -> SourceFuture<'_> {
+            let first = self.first.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(first) = first {
+                    return Ok(first);
+                }
+                let _guard = Cancellation(self.cancelled.clone());
+                self.started.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn expiration_is_published_while_refresh_is_stalled() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let provider = RefreshingCredentials::new(Blocking {
+            first: Mutex::new(Some(token("first", Duration::from_secs(4)).unwrap())),
+            started: started.clone(),
+            cancelled: Arc::new(AtomicUsize::new(0)),
+        });
+        let mut stream = provider.subscribe();
+        assert_eq!(stream.next().await.unwrap().unwrap().password(), "first");
+        let start = tokio::time::Instant::now();
+        started.notified().await;
+        let expired = stream.next().await.unwrap().unwrap_err();
+        assert!(start.elapsed() <= Duration::from_secs(5));
+        assert!(expired.to_string().contains("expired"));
+        let fresh = provider.subscribe().next().await.unwrap().unwrap_err();
+        assert!(fresh.to_string().contains("expired"));
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn initial_acquisition_has_a_bounded_wait() {
+        let provider = RefreshingCredentials::new(Blocking {
+            first: Mutex::new(None),
+            started: Arc::new(tokio::sync::Notify::new()),
+            cancelled: Arc::new(AtomicUsize::new(0)),
+        });
+        let error = provider.subscribe().next().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("exceeded"));
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn dropping_all_subscribers_cancels_inflight_acquisition() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        let provider = RefreshingCredentials::new(Blocking {
+            first: Mutex::new(None),
+            started: started.clone(),
+            cancelled: cancelled.clone(),
+        });
+        let stream = provider.subscribe();
+        started.notified().await;
+        drop(stream);
+        drop(provider);
+        tokio::task::yield_now().await;
+        assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn an_expired_fetch_is_rejected_and_a_later_valid_token_recovers() {
+        let provider = RefreshingCredentials::new(Scripted {
+            replies: Mutex::new(vec![
+                Ok(Expiring {
+                    username: None,
+                    password: SecretValue::new("expired"),
+                    expires_at: Some(SystemTime::UNIX_EPOCH),
+                }),
+                token("recovered", Duration::from_secs(3600)),
+            ]),
+            calls: Arc::new(AtomicUsize::new(0)),
+        });
+        let mut stream = provider.subscribe();
+        assert!(
+            stream
+                .next()
+                .await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("expired")
+        );
+        assert_eq!(
+            stream.next().await.unwrap().unwrap().password(),
+            "recovered"
+        );
+    }
+
+    #[rstest]
+    fn credential_failure_keeps_its_typed_cause_but_hides_it_at_the_redis_boundary() {
+        let error = crate::Error::credential(crate::error::CredentialStage::Identity)(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "credential-value"),
+        );
+        assert_eq!(
+            litellm_error::find::<std::io::Error>(&error)
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let public = super::public_error(&error).to_string();
+        assert!(public.contains("caller identity"));
+        assert!(!public.contains("credential-value"));
+    }
+
     fn endpoint(deployment: &RedisDeployment) -> Endpoint {
         match deployment {
             RedisDeployment::Standalone(server) => Endpoint::Url {
@@ -292,9 +492,16 @@ mod tests {
     fn user(username: &str, password: &str, lifetime: Duration) -> Result<Expiring, &'static str> {
         Ok(Expiring {
             username: Some(username.to_owned()),
-            password: password.to_owned(),
+            password: SecretValue::new(password),
             expires_at: Some(SystemTime::now() + lifetime),
         })
+    }
+
+    fn connection_users(connections: &[ClientConnection]) -> BTreeSet<&str> {
+        connections
+            .iter()
+            .map(|connection| connection.user.as_str())
+            .collect()
     }
 
     fn connection_ids(connections: &[ClientConnection]) -> BTreeSet<(u16, u64)> {
@@ -343,11 +550,8 @@ mod tests {
 
         let after = eventually(async || {
             let connections = server.clients().await.ok()?;
-            (!connections.is_empty()
-                && connections
-                    .iter()
-                    .all(|connection| connection.user == "bob"))
-            .then_some(connections)
+            (!connections.is_empty() && connection_users(&connections) == BTreeSet::from(["bob"]))
+                .then_some(connections)
         })
         .await;
         server
@@ -356,10 +560,7 @@ mod tests {
             .unwrap();
 
         assert!(!before.is_empty());
-        assert!(
-            before.iter().all(|connection| connection.user == "alice"),
-            "{before:?}"
-        );
+        assert_eq!(connection_users(&before), BTreeSet::from(["alice"]));
         assert_eq!(connection_ids(&after), connection_ids(&before));
         assert_eq!(
             client.get::<String>("k").await.unwrap().as_deref(),
@@ -374,12 +575,7 @@ mod tests {
 
         assert_eq!(value, "1");
         assert!(!reconnected.is_empty());
-        assert!(
-            reconnected
-                .iter()
-                .all(|connection| connection.user == "bob"),
-            "{reconnected:?}"
-        );
+        assert_eq!(connection_users(&reconnected), BTreeSet::from(["bob"]));
         assert!(connection_ids(&reconnected).is_disjoint(&connection_ids(&after)));
     }
 }

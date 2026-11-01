@@ -1,3 +1,4 @@
+use crate::native::CredentialAttempt;
 use litellm_auth_types::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential, Sourced,
     TokenProviderHandle,
@@ -57,14 +58,14 @@ trait AzureTokenAcquirer: Send + Sync {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>>;
 }
 
 impl AzureTokenAcquirer for NativeAzureTokenAcquirer {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
         Box::pin(NativeAzureTokenAcquirer::acquire(self, request))
     }
 }
@@ -123,6 +124,7 @@ impl AzureAuthService {
                 self.native
                     .acquire(request)
                     .await
+                    .into_result()
                     .map(|credential| Sourced::new(credential, source))
                     .map(Some)
             }
@@ -131,6 +133,7 @@ impl AzureAuthService {
                 self.native
                     .acquire(request)
                     .await
+                    .into_result()
                     .map(|credential| Some(Sourced::new(credential, source)))
             }
             AzureCredentialPlan::Chain(requests) => {
@@ -138,8 +141,11 @@ impl AzureAuthService {
                 for request in requests {
                     let source = request.credential_source();
                     match self.native.acquire(request).await {
-                        Ok(credential) => return Ok(Some(Sourced::new(credential, source))),
-                        Err(error) => failures.push(error),
+                        CredentialAttempt::Resolved(credential) => {
+                            return Ok(Some(Sourced::new(credential, source)));
+                        }
+                        CredentialAttempt::Unavailable(error) => failures.push(error),
+                        CredentialAttempt::Failed(error) => return Err(error),
                     }
                 }
                 match failures.pop() {
@@ -522,7 +528,10 @@ mod tests {
     #[derive(Debug)]
     struct FileResolver;
 
+    use crate::native::CredentialAttempt;
+
     struct ChainAcquirer {
+        terminal: bool,
         requests: Mutex<Vec<&'static str>>,
         succeed_on: Option<&'static str>,
     }
@@ -531,20 +540,25 @@ mod tests {
         fn acquire(
             &self,
             request: ValidatedAzureRequest,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
             let kind = request.kind();
             self.requests.lock().unwrap().push(kind);
             Box::pin(async move {
                 if self.succeed_on == Some(kind) {
-                    Ok(ResolvedCredential::AccessToken {
+                    CredentialAttempt::Resolved(ResolvedCredential::AccessToken {
                         token: SecretValue::new("chain-token"),
                         expires_on: None,
                     })
                 } else {
-                    Err(Error::CredentialAcquisition(
-                        litellm_auth_types::ErrorDetail::Unresolved { subject: kind },
-                    ))
+                    let error =
+                        Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::Unresolved {
+                            subject: kind,
+                        });
+                    if self.terminal {
+                        CredentialAttempt::Failed(error)
+                    } else {
+                        CredentialAttempt::Unavailable(error)
+                    }
                 }
             })
         }
@@ -732,11 +746,10 @@ mod tests {
         fn acquire(
             &self,
             request: ValidatedAzureRequest,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
             Box::pin(async move {
                 if request.kind() == "developer-tools" {
-                    return Ok(ResolvedCredential::AccessToken {
+                    return CredentialAttempt::Resolved(ResolvedCredential::AccessToken {
                         token: SecretValue::new("cli-token"),
                         expires_on: None,
                     });
@@ -790,9 +803,11 @@ mod tests {
         }
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn default_chain_uses_declared_order_and_stops_after_success() {
         let acquirer = Arc::new(ChainAcquirer {
+            terminal: false,
             requests: Mutex::new(Vec::new()),
             succeed_on: Some("developer-tools"),
         });
@@ -815,9 +830,11 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn chain_reports_each_acquisition_failure() {
         let acquirer = Arc::new(ChainAcquirer {
+            terminal: false,
             requests: Mutex::new(Vec::new()),
             succeed_on: None,
         });
@@ -842,6 +859,27 @@ mod tests {
             report.contains("developer-tools did not resolve"),
             "{report}"
         );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn a_configured_identity_failure_does_not_fall_back_to_a_developer_identity() {
+        let acquirer = Arc::new(ChainAcquirer {
+            terminal: true,
+            requests: Mutex::new(Vec::new()),
+            succeed_on: Some("developer-tools"),
+        });
+        let service = AzureAuthService::with_acquirer(acquirer.clone());
+        let inputs = AzureAuthInputs {
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Default::default()
+        };
+        let error = service
+            .get_azure_ad_token(&inputs, &|_| None)
+            .await
+            .unwrap_err();
+        assert_eq!(*acquirer.requests.lock().unwrap(), ["managed-identity"]);
+        assert!(matches!(error, Error::CredentialAcquisition(_)));
     }
 
     #[derive(Debug)]

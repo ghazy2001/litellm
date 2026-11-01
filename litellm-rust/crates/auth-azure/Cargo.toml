@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-secret-value.workspace = true
 litellm-auth-types.workspace = true
+litellm-error.workspace = true
 
 moka.workspace = true
 serde_json.workspace = true
@@ -20,6 +21,5 @@ azure_core = "1.0.0"
 azure_identity = { version = "1.0.0", features = ["tokio"] }
 
 [dev-dependencies]
-litellm-error.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
